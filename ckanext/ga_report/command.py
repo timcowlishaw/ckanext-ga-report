@@ -41,8 +41,8 @@ class GetAuthToken(CkanCommand):
     """
     summary = __doc__.split('\n')[0]
     usage = __doc__
-    max_args = 0
-    min_args = 0
+    max_args = 1
+    min_args = 1
 
     def command(self):
         """
@@ -151,3 +151,103 @@ class LoadAnalytics(CkanCommand):
             # The month to use
             for_date = datetime.datetime.strptime(time_period, '%Y-%m')
             downloader.specific_month(for_date)
+
+class GenerateDatasetsCsv(CkanCommand):
+    """Generate the per-dataset statistics CSV 
+
+    Usage: paster generatedatasetscsv <output-path>
+    """
+    summary = __doc__.split('\n')[0]
+    usage = __doc__
+    max_args = 1
+    min_args = 1 
+
+    def command(self):
+        self._load_config()
+        import csv
+
+        with open(self.args[0], "wb") as outfile:
+            writer = csv.writer(outfile)
+            writer.writerow(["Dataset Title", "Dataset Name", "Views", "Visits", "Resource downloads", "Period Name"])
+            packages = self._get_packages()
+            for package,view,visit,downloads in packages:
+                writer.writerow([package.title.encode('utf-8'),
+                                package.name.encode('utf-8'),
+                                view,
+                                visit,
+                                downloads,
+                                'All'])
+    def _get_packages(self):
+        import ckan.model as model
+        from ga_model import GA_Url, GA_Stat
+        packages = []
+        entries = model.Session.query(GA_Url, model.Package).filter(model.Package.name ==GA_Url.package_id).filter(GA_Url.url.like('/dataset/%')).filter(GA_Url.period_name=='All').order_by('ga_url.pageviews::int desc').all()
+        for entry,package in entries:
+            if package:
+                dls = model.Session.query(GA_Stat).filter(GA_Stat.stat_name=='Downloads').filter(GA_Stat.key==package.name)
+                downloads = 0
+                for x in dls:
+                    downloads += int(x.value)
+                packages.append((package, entry.pageviews, entry.visits, downloads))
+            else:
+                log.warning('Could not find package associated package')
+
+        return packages
+
+
+class GenerateReferrersCsv(CkanCommand):
+    """Generate the top referred datasets statistics CSV
+    Usage: paster generatereferrerscsv <output-path>
+    """
+    summary = __doc__.split('\n')[0]
+    usage = __doc__
+    max_args = 1
+    min_args = 1 
+    n_top_ranked = 5
+    
+    def command(self):
+        self._load_config()
+        import csv
+
+        with open(self.args[0], "wb") as outfile:
+            writer = csv.writer(outfile)
+            writer.writerow(["Dataset Title", "Dataset Name", "Referred Visits", "Period Name"])
+            data = self._get_data()
+            for (title, name, shares, period) in data:
+                writer.writerow([
+                    title.encode("utf-8"),
+                    name.encode("utf-8"),
+                    shares,
+                    period])
+
+    def _get_data(self):
+        return self._get_data_for_periods() + self._get_top_datasets(self.n_top_ranked);
+
+    def _get_data_for_periods(self):
+        return [dataset for period in self._get_periods()
+                 for dataset in self._get_top_datasets(self.n_top_ranked, period)]
+
+    def _get_top_datasets(self, n, period="All"):
+        import ckan.model as model
+        from ga_model import GA_ReferralStat, GA_Url
+        from sqlalchemy import func
+        from sqlalchemy.sql.expression import literal_column
+        query = (model.Session.query(
+            func.min(model.Package.title),
+            func.min(model.Package.name),
+            func.sum(GA_ReferralStat.count),
+            literal_column("'" + period + "'").label("period"))
+            .join(GA_Url, model.Package.name == GA_Url.package_id)
+            .join(GA_ReferralStat, GA_Url.url == GA_ReferralStat.url)
+            .filter(GA_Url.url.like("/dataset/%"))
+            .group_by(GA_Url.url)
+            .order_by(func.sum(GA_ReferralStat.count).desc()))
+        if period != "All":
+            query = query.filter(GA_ReferralStat.period_name==period)
+        return query.limit(n).all()
+    
+    def _get_periods(self):
+        import ckan.model as model
+        from ga_model import GA_ReferralStat
+        return [period for (period,) in model.Session.query(GA_ReferralStat.period_name).order_by(GA_ReferralStat.period_name).distinct().all()]
+

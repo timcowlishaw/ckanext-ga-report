@@ -34,5 +34,7 @@ setup(
         initdb = ckanext.ga_report.command:InitDB
         getauthtoken = ckanext.ga_report.command:GetAuthToken
         fixtimeperiods = ckanext.ga_report.command:FixTimePeriods
+        generatedatasetscsv = ckanext.ga_report.command:GenerateDatasetsCsv
+        generatereferrerscsv = ckanext.ga_report.command:GenerateReferrersCsv
 	""",
 )
